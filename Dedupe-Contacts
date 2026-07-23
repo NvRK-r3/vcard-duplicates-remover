@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""
+vCard Duplicate Contacts Remover
+---------------------------------
+Reads a .vcf (vCard) file, finds duplicate contacts, merges them,
+and writes a cleaned .vcf file plus a plain-text report of what was merged.
+
+Matching strategy (in order):
+  1. Exact match on a normalized phone number (last 10 digits, non-digits stripped).
+  2. Exact match on a normalized email address (lowercased, trimmed).
+  3. Fuzzy match on full name (similarity >= --threshold, default 0.90),
+     used only as a fallback when there's no phone/email in common.
+
+Contacts that match by any rule are grouped together and merged into a
+single contact that keeps the most complete information (e.g. all unique
+phone numbers/emails from the group, the longest name, etc).
+
+Usage:
+    python3 dedupe_contacts.py input.vcf -o output.vcf [--threshold 0.90] [--report report.txt]
+"""
+
+import argparse
+import difflib
+import re
+import sys
+from pathlib import Path
+
+import vobject
+
+
+def normalize_phone(raw):
+    digits = re.sub(r"\D", "", raw or "")
+    if not digits:
+        return None
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+def normalize_email(raw):
+    if not raw:
+        return None
+    return raw.strip().lower()
+
+
+def normalize_name(raw):
+    if not raw:
+        return ""
+    return re.sub(r"\s+", " ", raw).strip().lower()
+
+
+class Contact:
+    def __init__(self, vcard, index):
+        self.vcard = vcard
+        self.index = index
+        self.name = self._get_fn()
+        self.phones = {p for p in (normalize_phone(t.value) for t in getattr(vcard, "tel_list", [])) if p}
+        self.emails = {e for e in (normalize_email(t.value) for t in getattr(vcard, "email_list", [])) if e}
+
+    def _get_fn(self):
+        if hasattr(self.vcard, "fn"):
+            return self.vcard.fn.value
+        if hasattr(self.vcard, "n"):
+            n = self.vcard.n.value
+            return f"{n.given} {n.family}".strip()
+        return "(no name)"
+
+
+def load_contacts(path):
+    text = Path(path).read_text(encoding="utf-8", errors="ignore")
+    contacts = []
+    for i, vcard in enumerate(vobject.readComponents(text)):
+        contacts.append(Contact(vcard, i))
+    return contacts
+
+
+class UnionFind:
+    def __init__(self, n):
+        self.parent = list(range(n))
+
+    def find(self, x):
+        while self.parent[x] != x:
+            self.parent[x] = self.parent[self.parent[x]]
+            x = self.parent[x]
+        return x
+
+    def union(self, a, b):
+        ra, rb = self.find(a), self.find(b)
+        if ra != rb:
+            self.parent[rb] = ra
+
+
+def find_duplicate_groups(contacts, threshold):
+    n = len(contacts)
+    uf = UnionFind(n)
+
+    phone_index = {}
+    email_index = {}
+
+    for c in contacts:
+        for p in c.phones:
+            phone_index.setdefault(p, []).append(c.index)
+        for e in c.emails:
+            email_index.setdefault(e, []).append(c.index)
+
+    for group in list(phone_index.values()) + list(email_index.values()):
+        for a, b in zip(group, group[1:]):
+            uf.union(a, b)
+
+    # Fuzzy name fallback only for contacts with no phone/email overlap already found.
+    names = [normalize_name(c.name) for c in contacts]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if uf.find(i) == uf.find(j):
+                continue
+            if not names[i] or not names[j]:
+                continue
+            ratio = difflib.SequenceMatcher(None, names[i], names[j]).ratio()
+            if ratio >= threshold:
+                uf.union(i, j)
+
+    groups = {}
+    for c in contacts:
+        root = uf.find(c.index)
+        groups.setdefault(root, []).append(c)
+    return list(groups.values())
+
+
+def merge_group(group):
+    """Merge a group of duplicate Contact objects into one vobject vCard."""
+    # Keep the longest FN as the canonical name.
+    base = max(group, key=lambda c: len(c.name or "")).vcard
+
+    all_phones = {}
+    all_emails = {}
+    for c in group:
+        for t in getattr(c.vcard, "tel_list", []):
+            key = normalize_phone(t.value)
+            if key and key not in all_phones:
+                all_phones[key] = t.value
+        for t in getattr(c.vcard, "email_list", []):
+            key = normalize_email(t.value)
+            if key and key not in all_emails:
+                all_emails[key] = t.value
+
+    merged = vobject.vCard()
+    merged.add("fn").value = base.fn.value if hasattr(base, "fn") else group[0].name
+    if hasattr(base, "n"):
+        merged.add("n").value = base.n.value
+
+    for val in all_phones.values():
+        tel = merged.add("tel")
+        tel.value = val
+
+    for val in all_emails.values():
+        email = merged.add("email")
+        email.value = val
+
+    # Carry over org/title from whichever contact has them, if present.
+    for attr in ("org", "title", "adr", "note"):
+        for c in group:
+            if hasattr(c.vcard, attr):
+                field = merged.add(attr)
+                field.value = getattr(c.vcard, attr).value
+                break
+
+    return merged
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Remove duplicate contacts from a vCard (.vcf) file.")
+    parser.add_argument("input", help="Path to input .vcf file")
+    parser.add_argument("-o", "--output", default="deduped.vcf", help="Path to output .vcf file")
+    parser.add_argument("--threshold", type=float, default=0.90,
+                         help="Fuzzy name-match similarity threshold (0-1), default 0.90")
+    parser.add_argument("--report", default="dedupe_report.txt", help="Path to write a text report")
+    args = parser.parse_args()
+
+    contacts = load_contacts(args.input)
+    if not contacts:
+        print(f"No contacts found in {args.input}", file=sys.stderr)
+        sys.exit(1)
+
+    groups = find_duplicate_groups(contacts, args.threshold)
+
+    merged_cards = []
+    report_lines = [f"Loaded {len(contacts)} contacts from {args.input}", ""]
+    dup_groups = 0
+    removed = 0
+
+    for group in groups:
+        if len(group) > 1:
+            dup_groups += 1
+            removed += len(group) - 1
+            names = ", ".join(c.name for c in group)
+            report_lines.append(f"Merged {len(group)} contacts -> kept 1: [{names}]")
+            merged_cards.append(merge_group(group))
+        else:
+            merged_cards.append(group[0].vcard)
+
+    report_lines.append("")
+    report_lines.append(f"Duplicate groups found: {dup_groups}")
+    report_lines.append(f"Contacts removed: {removed}")
+    report_lines.append(f"Final contact count: {len(merged_cards)}")
+
+    with open(args.output, "w", encoding="utf-8") as f:
+        for card in merged_cards:
+            f.write(card.serialize())
+
+    with open(args.report, "w", encoding="utf-8") as f:
+        f.write("\n".join(report_lines))
+
+    print("\n".join(report_lines))
+    print(f"\nCleaned vCard written to: {args.output}")
+    print(f"Report written to: {args.report}")
+
+
+if __name__ == "__main__":
+    main()
