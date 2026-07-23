@@ -1,0 +1,33 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:John Smith
+N:Smith;John;;;
+TEL:+1 555-123-4567
+EMAIL:john.smith@example.com
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:John Smith
+N:Smith;John;;;
+TEL:(555) 123-4567
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Jon Smith
+N:Smith;Jon;;;
+EMAIL:john.smith@example.com
+ORG:Acme Corp
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Jane Doe
+N:Doe;Jane;;;
+TEL:555-987-6543
+EMAIL:jane.doe@example.com
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Janet Doe
+N:Doe;Janet;;;
+TEL:555-000-1111
+END:VCARD
