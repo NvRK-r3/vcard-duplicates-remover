@@ -2,21 +2,27 @@ BEGIN:VCARD
 VERSION:3.0
 FN:John Smith
 N:Smith;John;;;
-TEL:+1 555-123-4567
-EMAIL:john.smith@example.com
+TEL;TYPE=CELL:+1 555-123-4567
+EMAIL;TYPE=HOME:john.smith@example.com
 END:VCARD
 BEGIN:VCARD
 VERSION:3.0
 FN:John Smith
 N:Smith;John;;;
-TEL:(555) 123-4567
+TEL;TYPE=HOME:(555) 123-4567
+NOTE:Note
+BDAY:----1015
+ORG:Corp2
 END:VCARD
 BEGIN:VCARD
 VERSION:3.0
 FN:Jon Smith
 N:Smith;Jon;;;
 EMAIL:john.smith@example.com
+EMAIL;TYPE=Custom:john.smith@example.com
 ORG:Acme Corp
+BDAY:19531015T231000Z
+ADR;TYPE=HOME2:;;address;;;;
 END:VCARD
 BEGIN:VCARD
 VERSION:3.0
@@ -24,10 +30,23 @@ FN:Jane Doe
 N:Doe;Jane;;;
 TEL:555-987-6543
 EMAIL:jane.doe@example.com
+ANNIVERSARY:19960415
 END:VCARD
 BEGIN:VCARD
 VERSION:3.0
 FN:Janet Doe
 N:Doe;Janet;;;
 TEL:555-000-1111
+ANNIVERSARY:19960115
+GENDER:F
+BDAY;VALUE=text:circa 1800
+END:VCARD
+BEGIN:VCARD
+VERSION:4.0
+PRODID:lonercard
+FN:test3
+N:test3
+NOTE:Note
+NOTE:Note2
+TEL;type=CELL;type=VOICE;type=pref:555-000-1111
 END:VCARD

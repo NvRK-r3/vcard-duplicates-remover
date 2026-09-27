@@ -126,41 +126,43 @@ def find_duplicate_groups(contacts, threshold):
 
 def merge_group(group):
     """Merge a group of duplicate Contact objects into one vobject vCard."""
-    # Keep the longest FN as the canonical name.
-    base = max(group, key=lambda c: len(c.name or "")).vcard
 
+    merged = vobject.vCard()
     all_phones = {}
     all_emails = {}
     for c in group:
-        for t in getattr(c.vcard, "tel_list", []):
-            key = normalize_phone(t.value)
-            if key and key not in all_phones:
-                all_phones[key] = t.value
-        for t in getattr(c.vcard, "email_list", []):
-            key = normalize_email(t.value)
-            if key and key not in all_emails:
-                all_emails[key] = t.value
-
-    merged = vobject.vCard()
-    merged.add("fn").value = base.fn.value if hasattr(base, "fn") else group[0].name
-    if hasattr(base, "n"):
-        merged.add("n").value = base.n.value
-
-    for val in all_phones.values():
-        tel = merged.add("tel")
-        tel.value = val
-
-    for val in all_emails.values():
-        email = merged.add("email")
-        email.value = val
-
-    # Carry over org/title from whichever contact has them, if present.
-    for attr in ("org", "title", "adr", "note"):
-        for c in group:
-            if hasattr(c.vcard, attr):
-                field = merged.add(attr)
-                field.value = getattr(c.vcard, attr).value
-                break
+        for contact_line in c.vcard.getChildren():
+            if contact_line.name in ("VERSION", "PRODID", "REV"):
+                continue
+            if contact_line.name == "N" or contact_line.name == "FN":
+                if not hasattr(merged, contact_line.name.lower()) or len(getattr(merged, contact_line.name.lower()).serialize()) < len(contact_line.serialize()):
+                    setattr(merged, contact_line.name.lower(), contact_line)
+            elif contact_line.name == "TEL":
+                np = normalize_phone(contact_line.value)
+                if np and np not in all_phones:
+                    merged.add(contact_line)
+                    all_phones[np] = contact_line.value
+            elif contact_line.name == "EMAIL":
+                np = normalize_email(contact_line.value)
+                if np and np not in all_emails:
+                    merged.add(contact_line)
+                    all_emails[np] = contact_line.value
+            # keep most complete/oldest birthday or anniversary
+            elif contact_line.name == "BDAY" or contact_line.name == "ANNIVERSARY":
+                newdate = contact_line.value
+                if not hasattr(merged, contact_line.name.lower()):
+                    setattr(merged, contact_line.name.lower(), contact_line)
+                else:
+                    olddate = getattr(merged, contact_line.name.lower()).value
+                    if len(olddate) < len(newdate) \
+                            or (len(olddate) == len(newdate)
+                                and int(re.sub(r"\D", "", olddate)) > int(re.sub(r"\D", "", newdate))):
+                        setattr(merged, contact_line.name.lower(), contact_line)
+            # keep only one entry for each of these props
+            elif contact_line.name in ["KIND", "GENDER", "UID"]:
+                setattr(merged, contact_line.name.lower(), contact_line)
+            elif contact_line not in merged.lines():
+                merged.add(contact_line)
 
     return merged
 
@@ -196,10 +198,9 @@ def main():
         else:
             merged_cards.append(group[0].vcard)
 
-    report_lines.append("")
-    report_lines.append(f"Duplicate groups found: {dup_groups}")
-    report_lines.append(f"Contacts removed: {removed}")
-    report_lines.append(f"Final contact count: {len(merged_cards)}")
+    report_lines.append(f"\nDuplicate groups found: {dup_groups}\n"
+                        f"Contacts removed: {removed}\n"
+                        f"Final contact count: {len(merged_cards)}")
 
     with open(args.output, "w", encoding="utf-8") as f:
         for card in merged_cards:
@@ -208,9 +209,9 @@ def main():
     with open(args.report, "w", encoding="utf-8") as f:
         f.write("\n".join(report_lines))
 
-    print("\n".join(report_lines))
-    print(f"\nCleaned vCard written to: {args.output}")
-    print(f"Report written to: {args.report}")
+    print("\n".join(report_lines),
+          f"\n\nCleaned vCard written to: {args.output}\n"
+          f"Report written to: {args.report}")
 
 
 if __name__ == "__main__":
